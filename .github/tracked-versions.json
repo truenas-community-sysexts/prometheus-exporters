@@ -1,0 +1,60 @@
+{
+  "debian": {
+    "suite": "bookworm"
+  },
+  "freeipmi": {
+    "package": "freeipmi-tools"
+  },
+  "exporters": {
+    "node_exporter": {
+      "repo": "prometheus/node_exporter",
+      "version": "v1.11.1",
+      "asset": "node_exporter-{vnum}.linux-amd64.tar.gz",
+      "extract": "node_exporter-{vnum}.linux-amd64/node_exporter",
+      "port": 9100
+    },
+    "smartctl_exporter": {
+      "repo": "prometheus-community/smartctl_exporter",
+      "version": "v0.14.0",
+      "asset": "smartctl_exporter-{vnum}.linux-amd64.tar.gz",
+      "extract": "smartctl_exporter-{vnum}.linux-amd64/smartctl_exporter",
+      "port": 9633
+    },
+    "nut_exporter": {
+      "repo": "DRuggeri/nut_exporter",
+      "version": "v3.3.0",
+      "asset": "nut_exporter-{version}-linux-amd64",
+      "port": 9199
+    },
+    "blackbox_exporter": {
+      "repo": "prometheus/blackbox_exporter",
+      "version": "v0.28.0",
+      "asset": "blackbox_exporter-{vnum}.linux-amd64.tar.gz",
+      "extract": "blackbox_exporter-{vnum}.linux-amd64/blackbox_exporter",
+      "port": 9115,
+      "config": {
+        "name": "blackbox.yml",
+        "from": "blackbox_exporter-{vnum}.linux-amd64/blackbox.yml"
+      }
+    },
+    "snmp_exporter": {
+      "repo": "prometheus/snmp_exporter",
+      "version": "v0.30.1",
+      "asset": "snmp_exporter-{vnum}.linux-amd64.tar.gz",
+      "extract": "snmp_exporter-{vnum}.linux-amd64/snmp_exporter",
+      "port": 9116,
+      "config": {
+        "name": "snmp.yml",
+        "from": "snmp_exporter-{vnum}.linux-amd64/snmp.yml"
+      }
+    },
+    "ipmi_exporter": {
+      "repo": "prometheus-community/ipmi_exporter",
+      "version": "v1.10.1",
+      "asset": "ipmi_exporter-{vnum}.linux-amd64.tar.gz",
+      "extract": "ipmi_exporter-{vnum}.linux-amd64/ipmi_exporter",
+      "port": 9290,
+      "needs_freeipmi": true
+    }
+  }
+}

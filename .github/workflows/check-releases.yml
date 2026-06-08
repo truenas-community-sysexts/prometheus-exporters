@@ -1,0 +1,86 @@
+name: Check for New Releases
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: check-releases
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # PAT required to push tracked-versions.json back to main (the default
+          # GITHUB_TOKEN's github-actions[bot] is not exempt from the ruleset).
+          token: ${{ secrets.CHECK_BUILDS }}
+
+      # Every exporter is github-sourced; the asset/extract fields are version
+      # templates, so bumping 'version' is enough to roll a new build.
+      - name: Check upstream exporter releases
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          CHANGED=0
+          while IFS=$'\t' read -r name repo current; do
+            echo "=== ${name} (${repo}) tracked ${current} ==="
+            if ! REL=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                  "https://api.github.com/repos/${repo}/releases/latest"); then
+              echo "::warning title=check::failed to query ${repo}, skipping"; continue
+            fi
+            LATEST=$(printf '%s' "$REL" | jq -r '.tag_name // empty')
+            if [ -z "$LATEST" ]; then
+              echo "::warning title=check::no tag_name for ${repo}, skipping"; continue
+            fi
+            echo "  latest upstream: ${LATEST}"
+            if [ "$LATEST" != "$current" ]; then
+              echo "  -> bumping ${name}: ${current} -> ${LATEST}"
+              tmp=$(mktemp)
+              jq --arg name "$name" --arg latest "$LATEST" \
+                 '.exporters[$name].version = $latest' \
+                 .github/tracked-versions.json > "$tmp"
+              mv "$tmp" .github/tracked-versions.json
+              CHANGED=1
+            fi
+          done < <(jq -r '.exporters | to_entries[]
+                          | [.key, .value.repo, .value.version] | @tsv' \
+                          .github/tracked-versions.json)
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push tracked-versions
+        if: steps.check.outputs.changed == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/tracked-versions.json
+          git commit -m "Update tracked exporter versions" || { echo "nothing to commit"; exit 1; }
+          if ! git push; then
+            echo "Push failed, attempting rebase and retry..."
+            git pull --rebase || { echo "::error title=push::rebase failed"; exit 1; }
+            git push || { echo "::error title=push::push failed after rebase"; exit 1; }
+          fi
+
+      - name: Trigger build
+        if: steps.check.outputs.changed == '1'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml',
+              ref: 'main',
+              inputs: { mark_latest: 'false' }
+            });
+            console.log('Dispatched build.yml (mark_latest=false) after exporter version bump');

@@ -1,0 +1,381 @@
+name: Build prometheus-exporters Sysext
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Debian suite to bundle FreeIPMI against (blank = tracked)'
+        required: false
+        default: ''
+      mark_latest:
+        description: 'Mark this release as Latest on GitHub'
+        required: false
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'true'
+
+  workflow_call:
+    inputs:
+      suite:
+        type: string
+        required: false
+        default: ''
+      mark_latest:
+        type: string
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+env:
+  SYSEXT_ROOT: /tmp/pe-sysext
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      suite: ${{ steps.params.outputs.suite }}
+      mark_latest: ${{ steps.params.outputs.mark_latest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/tracked-versions.json
+          sparse-checkout-cone-mode: false
+      - name: Resolve build parameters
+        id: params
+        env:
+          INPUT_SUITE: ${{ inputs.suite }}
+          INPUT_MARK_LATEST: ${{ inputs.mark_latest }}
+        run: |
+          TRACKED_SUITE=$(jq -r '.debian.suite' .github/tracked-versions.json)
+          SUITE="${INPUT_SUITE:-$TRACKED_SUITE}"
+          MARK_LATEST="${INPUT_MARK_LATEST:-true}"
+          {
+            echo "suite=${SUITE}"
+            echo "mark_latest=${MARK_LATEST}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: suite=${SUITE} mark_latest=${MARK_LATEST}"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Debian container so FreeIPMI is apt-installable and bundled against the
+    # pinned (oldest-supported) glibc; the Go exporters are static and arch-
+    # independent of the suite.
+    container: debian:${{ needs.resolve.outputs.suite }}-slim
+    outputs:
+      run_number: ${{ steps.build_id.outputs.run_number }}
+      build_date: ${{ steps.build_id.outputs.build_date }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl tar gzip xz-utils \
+            squashfs-tools zstd patchelf jq coreutils git dpkg-dev
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Compute build identifier
+        id: build_id
+        run: |
+          echo "run_number=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y.%m.%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Initialize sysext tree
+        run: |
+          rm -rf "${SYSEXT_ROOT}"
+          mkdir -p "${SYSEXT_ROOT}/usr/bin"
+          mkdir -p "${SYSEXT_ROOT}/usr/lib/systemd/system"
+          mkdir -p "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/configs-seed"
+          mkdir -p "${SYSEXT_ROOT}/usr/lib/extension-release.d"
+          echo "ID=_any" > "${SYSEXT_ROOT}/usr/lib/extension-release.d/extension-release.prometheus-exporters"
+          : > "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/exporters.txt"
+          : > "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/versions.txt"
+
+      - name: Fetch exporters
+        run: |
+          TVERS=.github/tracked-versions.json
+          jq -c '.exporters | to_entries[] | {name: .key} + .value' "$TVERS" \
+          | while IFS= read -r row; do
+              name=$(jq -r '.name' <<<"$row")
+              repo=$(jq -r '.repo' <<<"$row")
+              version=$(jq -r '.version' <<<"$row")
+              asset=$(jq -r '.asset' <<<"$row")
+              extract=$(jq -r '.extract // ""' <<<"$row")
+              cfg_name=$(jq -r '.config.name // ""' <<<"$row")
+              cfg_from=$(jq -r '.config.from // ""' <<<"$row")
+              vnum="${version#v}"
+
+              # Expand {version}/{vnum} templates.
+              expand() { local s="$1"; s="${s//\{version\}/$version}"; s="${s//\{vnum\}/$vnum}"; printf '%s' "$s"; }
+              asset_r="$(expand "$asset")"
+              extract_r="$(expand "$extract")"
+              cfg_from_r="$(expand "$cfg_from")"
+
+              echo "=== ${name} ${version} ==="
+              work=$(mktemp -d)
+              dl="https://github.com/${repo}/releases/download/${version}/${asset_r}"
+              echo "  fetching ${dl}"
+              curl -fSL --retry 3 --max-time 300 "$dl" -o "${work}/${asset_r}"
+
+              if [ -z "$extract_r" ]; then
+                install -m 0755 "${work}/${asset_r}" "${SYSEXT_ROOT}/usr/bin/${name}"
+              else
+                tar -xzf "${work}/${asset_r}" -C "$work"
+                if [ ! -f "${work}/${extract_r}" ]; then
+                  echo "::error title=fetch::${name}: '${extract_r}' not found in ${asset_r}" >&2
+                  find "$work" -maxdepth 2 -type f >&2 || true
+                  exit 1
+                fi
+                install -m 0755 "${work}/${extract_r}" "${SYSEXT_ROOT}/usr/bin/${name}"
+                # Seed the example config (if this exporter ships one).
+                if [ -n "$cfg_name" ] && [ -n "$cfg_from_r" ]; then
+                  if [ ! -f "${work}/${cfg_from_r}" ]; then
+                    echo "::error title=fetch::${name}: config '${cfg_from_r}' not found in ${asset_r}" >&2
+                    exit 1
+                  fi
+                  install -m 0644 "${work}/${cfg_from_r}" \
+                    "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/configs-seed/${cfg_name}"
+                  echo "  seeded config: ${cfg_name}"
+                fi
+              fi
+              echo "${name}" >> "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/exporters.txt"
+              printf '%-20s %s\n' "$name" "$version" \
+                >> "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/versions.txt"
+              rm -rf "$work"
+            done
+
+      - name: Bundle FreeIPMI for ipmi_exporter
+        run: |
+          TVERS=.github/tracked-versions.json
+          PKG=$(jq -r '.freeipmi.package' "$TVERS")
+          echo "Installing FreeIPMI package: ${PKG}"
+          apt-get install -y --no-install-recommends "$PKG"
+          # Reuse the private-lib + rpath bundler from cli-tools. Append its
+          # binary names to a scratch manifest so the exporter manifest stays
+          # exporter-only.
+          .github/scripts/bundle-apt-tool.sh "${SYSEXT_ROOT}" "$PKG" /tmp/freeipmi-bins.txt
+          VER=$(dpkg-query -W -f='${Version}' "$PKG" 2>/dev/null || echo '?')
+          printf '%-20s %s (apt:%s, GPLv3)\n' "freeipmi" "$VER" "$PKG" \
+            >> "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/versions.txt"
+          echo "FreeIPMI tools bundled:"
+          sort /tmp/freeipmi-bins.txt | sed 's/^/  /'
+
+      - name: Assemble units + finalize tree
+        run: |
+          # systemd unit files (static, from the repo).
+          cp sysext/usr/lib/systemd/system/*.service \
+             "${SYSEXT_ROOT}/usr/lib/systemd/system/"
+          # Bundle the PREINIT script so install.sh can extract it from the .raw.
+          install -m 0755 scripts/prometheus-exporters-preinit.sh \
+            "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/prometheus-exporters-preinit.sh"
+
+          sort -u -o "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/exporters.txt" \
+                     "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/exporters.txt"
+
+          echo "=== Exporters ==="
+          cat "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/exporters.txt"
+          echo "=== Versions ==="
+          cat "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/versions.txt"
+          echo "=== Tree ==="
+          find "${SYSEXT_ROOT}" -type f -o -type l | sort
+
+      - name: Create prometheus-exporters.raw squashfs
+        run: |
+          mksquashfs "${SYSEXT_ROOT}" prometheus-exporters.raw -noappend -comp zstd -all-root
+          ls -lh prometheus-exporters.raw
+          unsquashfs -l prometheus-exporters.raw | head -80
+
+      - name: Smoke-test prometheus-exporters.raw
+        run: |
+          SMOKE=$(mktemp -d); trap 'rm -rf "$SMOKE"' EXIT
+          unsquashfs -d "${SMOKE}/x" prometheus-exporters.raw
+          fail=0
+
+          EXT="${SMOKE}/x/usr/lib/extension-release.d/extension-release.prometheus-exporters"
+          { [ -f "$EXT" ] && grep -qx 'ID=_any' "$EXT"; } || {
+            echo "::error title=smoke::extension-release missing or not ID=_any" >&2; fail=1; }
+
+          [ -x "${SMOKE}/x/usr/lib/prometheus-exporters/prometheus-exporters-preinit.sh" ] || {
+            echo "::error title=smoke::preinit script missing" >&2; fail=1; }
+
+          # Every exporter: binary + unit present, and runs --version here.
+          while IFS= read -r name; do
+            [ -z "$name" ] && continue
+            if [ -x "${SMOKE}/x/usr/bin/${name}" ]; then echo "  ok: bin ${name}"; else
+              echo "::error title=smoke::missing binary usr/bin/${name}" >&2; fail=1; fi
+            if [ -f "${SMOKE}/x/usr/lib/systemd/system/${name}.service" ]; then echo "  ok: unit ${name}.service"; else
+              echo "::error title=smoke::missing unit ${name}.service" >&2; fail=1; fi
+            if "${SMOKE}/x/usr/bin/${name}" --version >/dev/null 2>&1; then echo "  runs: ${name} --version"; else
+              echo "::error title=smoke::${name} --version failed" >&2; fail=1; fi
+          done < "${SMOKE}/x/usr/lib/prometheus-exporters/exporters.txt"
+
+          # config-bearing exporters must have seeded a default config.
+          for c in blackbox.yml snmp.yml; do
+            [ -f "${SMOKE}/x/usr/lib/prometheus-exporters/configs-seed/${c}" ] \
+              && echo "  ok: config-seed ${c}" \
+              || { echo "::error title=smoke::missing seed config ${c}" >&2; fail=1; }
+          done
+
+          # FreeIPMI must be bundled and self-contained (no missing libs).
+          IPMIMON="${SMOKE}/x/usr/sbin/ipmimonitoring"
+          if [ -x "$IPMIMON" ]; then
+            echo "  ok: FreeIPMI ipmimonitoring bundled"
+            if ldd "$IPMIMON" 2>/dev/null | grep -q 'not found'; then
+              echo "::error title=smoke::ipmimonitoring has unresolved libraries:" >&2
+              ldd "$IPMIMON" | grep 'not found' >&2; fail=1
+            else
+              echo "  ok: ipmimonitoring libraries resolve"
+            fi
+          else
+            echo "::error title=smoke::FreeIPMI ipmimonitoring not bundled at usr/sbin/ipmimonitoring" >&2; fail=1
+          fi
+
+          [ "$fail" -eq 0 ] || { echo "::error title=smoke::validation failed, refusing to publish" >&2; exit 1; }
+          echo "smoke-test OK"
+
+      - name: Generate checksum
+        run: |
+          sha256sum prometheus-exporters.raw > prometheus-exporters.raw.sha256
+          cat prometheus-exporters.raw.sha256
+
+      - name: Render release notes
+        env:
+          SUITE: ${{ needs.resolve.outputs.suite }}
+          BUILD_DATE: ${{ steps.build_id.outputs.build_date }}
+          RUN_NUMBER: ${{ steps.build_id.outputs.run_number }}
+          BUILD_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "## prometheus-exporters sysext for TrueNAS SCALE"
+            echo ""
+            echo "A bundle of Prometheus exporters, merged into \`/usr\` via systemd-sysext."
+            echo "Kernel-independent: this single release works on every TrueNAS version."
+            echo "Exporters ship **disabled**; enable them with \`install.sh --enable=...\`."
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Built (UTC) | \`${BUILD_DATE}\` |"
+            echo "| FreeIPMI apt base | Debian \`${SUITE}\` |"
+            echo "| Source commit | [\`${BUILD_SHA}\`](https://github.com/${REPO}/commit/${BUILD_SHA}) |"
+            echo ""
+            echo "### Included exporters"
+            echo '```'
+            cat "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/versions.txt"
+            echo '```'
+            echo ""
+            echo "### Install + enable"
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --enable=node_exporter,smartctl_exporter"
+            echo '```'
+            echo ""
+            echo "### Licensing"
+            echo "Repository code is MIT. Bundled exporters keep their upstream licenses"
+            echo "(Apache-2.0 / MIT). The bundled **FreeIPMI** binaries are **GPLv3**"
+            echo "(source: Debian \`freeipmi\` package). No proprietary binaries are shipped."
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: pe-sysext-${{ steps.build_id.outputs.build_date }}-r${{ steps.build_id.outputs.run_number }}
+          path: |
+            prometheus-exporters.raw
+            prometheus-exporters.raw.sha256
+            release-notes.md
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: true
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: pe-sysext-${{ needs.build.outputs.build_date }}-r${{ needs.build.outputs.run_number }}
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.build.outputs.build_date }}-r${{ needs.build.outputs.run_number }}
+          name: "prometheus-exporters ${{ needs.build.outputs.build_date }} (r${{ needs.build.outputs.run_number }})"
+          body_path: release-notes.md
+          files: |
+            prometheus-exporters.raw
+            prometheus-exporters.raw.sha256
+            scripts/prometheus-exporters-lib.sh
+            scripts/install.sh
+            scripts/restore.sh
+            scripts/uninstall.sh
+          draft: false
+          prerelease: false
+          make_latest: ${{ needs.resolve.outputs.mark_latest }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create hardware-test issue for auto-build
+        if: needs.resolve.outputs.mark_latest == 'false'
+        uses: actions/github-script@v9
+        env:
+          BUILD_DATE: ${{ needs.build.outputs.build_date }}
+          RUN_NUMBER: ${{ needs.build.outputs.run_number }}
+        with:
+          script: |
+            const tag = `v${process.env.BUILD_DATE}-r${process.env.RUN_NUMBER}`;
+            const title = `Hardware test: prometheus-exporters ${tag}`;
+            const releaseUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${tag}`;
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: 'hardware-test', color: 'FBCA04',
+                description: 'Auto-build awaiting verification on real hardware',
+              });
+            } catch (e) { if (e.status !== 422) throw e; }
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'hardware-test', per_page: 100,
+            });
+            if (existing.data.some(i => i.title.includes(tag))) {
+              console.log(`Open hardware-test issue already exists for ${tag}, skipping`); return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo, title,
+              labels: ['hardware-test'],
+              body: [
+                `An auto-build published a new release that needs verification before being promoted to **Latest**.`,
+                ``,
+                `**Release:** [${tag}](${releaseUrl})`,
+                ``,
+                `### Test checklist`,
+                `- [ ] Install and enable a couple: \`sudo ./install.sh --enable=node_exporter,smartctl_exporter\``,
+                `- [ ] \`sudo ./install.sh --check\` reports all OK`,
+                `- [ ] \`curl -s localhost:9100/metrics\` (node) and \`localhost:9633/metrics\` (smartctl) return data`,
+                `- [ ] \`--enable=ipmi_exporter\` on IPMI hardware: \`localhost:9290/metrics\` returns sensors (bundled FreeIPMI)`,
+                `- [ ] Reboot and confirm enabled exporters come back up`,
+                ``,
+                `### Promote`,
+                `Once verified, set the [release](${releaseUrl}) as **Latest** and close this issue.`,
+              ].join('\n'),
+            });
+            console.log(`Created hardware-test issue for ${tag}`);

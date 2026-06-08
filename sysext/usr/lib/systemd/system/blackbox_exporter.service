@@ -1,0 +1,19 @@
+[Unit]
+Description=Prometheus Blackbox Exporter (TrueNAS sysext)
+Documentation=https://github.com/prometheus/blackbox_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Config is seeded to the data pool on install and exposed here via the
+# preinit-managed /run path so edits survive reboots and TrueNAS updates.
+# Default listen address is :9115.
+EnvironmentFile=-/run/prometheus-exporters/env/blackbox_exporter.env
+ExecStart=/usr/bin/blackbox_exporter --config.file=/run/prometheus-exporters/configs/blackbox.yml $ARGS
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

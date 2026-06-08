@@ -1,0 +1,17 @@
+[Unit]
+Description=Prometheus smartctl Exporter (TrueNAS sysext)
+Documentation=https://github.com/prometheus-community/smartctl_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Uses the host's /usr/sbin/smartctl (ships with TrueNAS). Runs as root so it
+# can read SMART data. Default listen address is :9633.
+EnvironmentFile=-/run/prometheus-exporters/env/smartctl_exporter.env
+ExecStart=/usr/bin/smartctl_exporter $ARGS
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

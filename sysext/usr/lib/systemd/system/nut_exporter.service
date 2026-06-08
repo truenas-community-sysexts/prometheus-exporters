@@ -1,0 +1,19 @@
+[Unit]
+Description=Prometheus NUT (UPS) Exporter (TrueNAS sysext)
+Documentation=https://github.com/DRuggeri/nut_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Connects to a NUT upsd (default 127.0.0.1:3493). Point it at your server and
+# select variables via ARGS, e.g.
+#   ARGS="--nut.server=127.0.0.1 --nut.vars_enable=battery.charge,ups.status"
+EnvironmentFile=-/run/prometheus-exporters/env/nut_exporter.env
+ExecStart=/usr/bin/nut_exporter $ARGS
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=Prometheus Node Exporter (TrueNAS sysext)
+Documentation=https://github.com/prometheus/node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Optional overrides (e.g. ARGS="--web.listen-address=:9100 --collector.systemd").
+# The leading '-' makes a missing file non-fatal. Path is wired to the data
+# pool by prometheus-exporters-preinit.sh on every boot.
+EnvironmentFile=-/run/prometheus-exporters/env/node_exporter.env
+ExecStart=/usr/bin/node_exporter $ARGS
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

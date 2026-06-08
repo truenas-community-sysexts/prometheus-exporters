@@ -1,0 +1,18 @@
+[Unit]
+Description=Prometheus SNMP Exporter (TrueNAS sysext)
+Documentation=https://github.com/prometheus/snmp_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Config is seeded to the data pool on install and exposed here via the
+# preinit-managed /run path. Default listen address is :9116.
+EnvironmentFile=-/run/prometheus-exporters/env/snmp_exporter.env
+ExecStart=/usr/bin/snmp_exporter --config.file=/run/prometheus-exporters/configs/snmp.yml $ARGS
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=Prometheus IPMI Exporter (TrueNAS sysext)
+Documentation=https://github.com/prometheus-community/ipmi_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Local collection uses the bundled FreeIPMI tools (under /usr/sbin, merged by
+# the sysext). Runs as root for /dev/ipmi* access. Default listen address is
+# :9290. With no --config.file, ipmi_exporter uses its built-in local module;
+# add a custom config via ARGS="--config.file=/run/prometheus-exporters/configs/ipmi.yml".
+EnvironmentFile=-/run/prometheus-exporters/env/ipmi_exporter.env
+ExecStart=/usr/bin/ipmi_exporter $ARGS
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
