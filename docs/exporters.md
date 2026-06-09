@@ -1,6 +1,6 @@
 # Exporters Reference
 
-Per-exporter notes for running on TrueNAS SCALE. All listen on `0.0.0.0:<port>`
+Per-exporter notes for running on TrueNAS. All listen on `0.0.0.0:<port>`
 by default; scrape `http://<host>:<port>/metrics`. Change flags via an
 `env/<name>.env` file (see [install.md](install.md#configuring-an-exporter)).
 
