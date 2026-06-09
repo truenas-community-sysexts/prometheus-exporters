@@ -1,6 +1,6 @@
-# Prometheus Exporters Sysext for TrueNAS SCALE
+# Prometheus Exporters Sysext for TrueNAS
 
-A [systemd-sysext](https://www.freedesktop.org/software/systemd/man/systemd-sysext.html) package that adds a set of [Prometheus](https://prometheus.io/) exporters to TrueNAS SCALE — host, disk, UPS, IPMI, and probing metrics — without modifying the immutable root filesystem.
+A [systemd-sysext](https://www.freedesktop.org/software/systemd/man/systemd-sysext.html) package that adds a set of [Prometheus](https://prometheus.io/) exporters to TrueNAS — host, disk, UPS, IPMI, and probing metrics — without modifying the immutable root filesystem.
 
 Exporters ship **disabled**; you choose which to run with `--enable`. The selection and configs live on your data pool, and a PREINIT script restarts the enabled exporters on every boot, surviving reboots and TrueNAS updates. Because these are plain userspace binaries, **one release works on every TrueNAS version**.
 
@@ -29,7 +29,7 @@ Exporters ship **disabled**; you choose which to run with `--enable`. The select
 ## Quick Start
 
 ### Prerequisites
-- TrueNAS SCALE 25.10 or newer, root/sudo access
+- TrueNAS 25.10 or newer, root/sudo access
 - A data pool (for persistent config) and internet access (to download the release)
 
 ### Install + enable

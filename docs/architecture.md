@@ -4,7 +4,7 @@
 
 A systemd system extension overlays its `/usr` tree onto the running system via
 `overlayfs`, set up by `systemd-sysext`. It's the supported way to add software
-to an immutable OS like TrueNAS SCALE without touching the read-only root. The
+to an immutable OS like TrueNAS without touching the read-only root. The
 marker file `usr/lib/extension-release.d/extension-release.<name>` identifies
 it; we set `ID=_any` so it loads regardless of the host's `os-release` ID.
 
