@@ -379,6 +379,16 @@ jobs:
             if (existing.data.some(i => i.title.includes(tag))) {
               console.log(`Open hardware-test issue already exists for ${tag}, skipping`); return;
             }
+            // Test instructions. Every command must work exactly as written on
+            // a TrueNAS box: a human validator pastes them. The scripts are
+            // downloaded to /var/tmp (survives the step 4 reboot, unlike /tmp)
+            // so `install.sh --check` can be re-run from there after reboot.
+            // Every install.sh run must pass the local .raw: without it the
+            // script re-downloads Latest and replaces the build under test.
+            const base = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}`;
+            const dir = '/var/tmp/prometheus-exporters-test';
+            const ports = '9100 9633 9199 9115 9116 9290';
+
             await github.rest.issues.create({
               owner: context.repo.owner, repo: context.repo.repo, title,
               labels: ['hardware-test'],
@@ -388,22 +398,55 @@ jobs:
                 `**Release:** [${tag}](${releaseUrl})`,
                 `<!-- release-tag: ${tag} -->`,
                 ``,
-                `### Install THIS build to test it`,
-                `It is a **pre-release**, so the default \`releases/latest\` install would fetch the current Latest, not this build. Install this exact build:`,
+                `### Requirements`,
+                `- Any TrueNAS 25.10 or newer box with a data pool, including 26 betas. Userspace only (no kernel module), so one build serves every train and kernel.`,
+                `- The test enables all six exporters (node 9100, smartctl 9633, nut 9199, blackbox 9115, snmp 9116, ipmi 9290). ipmi_exporter only reads sensors on a box with a BMC (\`/dev/ipmi0\`); without one it still runs and reports \`ipmi_up 0\`.`,
+                ``,
+                `### 1. Pre-checks`,
                 "```bash",
-                `curl -fsSL https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/prometheus-exporters.raw -o /tmp/prometheus-exporters.raw`,
-                `curl -fsSL https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/install.sh | sudo bash -s -- --enable=node_exporter,smartctl_exporter /tmp/prometheus-exporters.raw`,
+                `cat /etc/version                       # 25.10 or newer`,
+                `sudo ss -ltnp | grep -E ':(${ports.split(' ').join('|')})\\s'   # empty, or only *_exporter from an earlier install`,
+                `ls -l /dev/ipmi0                       # present = BMC, so ipmi_exporter can read sensors`,
                 "```",
                 ``,
-                `### Test checklist`,
-                `- [ ] Install and enable a couple: \`sudo ./install.sh --enable=node_exporter,smartctl_exporter\``,
-                `- [ ] \`sudo ./install.sh --check\` reports all OK`,
-                `- [ ] \`curl -s localhost:9100/metrics\` (node) and \`localhost:9633/metrics\` (smartctl) return data`,
-                `- [ ] \`--enable=ipmi_exporter\` on IPMI hardware: \`localhost:9290/metrics\` returns sensors (bundled FreeIPMI)`,
-                `- [ ] Reboot and confirm enabled exporters come back up`,
+                `### 2. Install this build`,
+                `It is a pre-release, so the default install (which fetches Latest) would not test it. Install it from its tag:`,
+                "```bash",
+                `BASE=${base}`,
+                `mkdir -p ${dir} && cd ${dir}`,
+                `for f in prometheus-exporters.raw prometheus-exporters.raw.sha256 install.sh prometheus-exporters-lib.sh; do curl -fsSLO "$BASE/$f"; done`,
+                `sha256sum -c prometheus-exporters.raw.sha256          # prometheus-exporters.raw: OK`,
+                `sudo bash install.sh --enable=all prometheus-exporters.raw   # add --pool=NAME if it asks; "started <name>" for all six`,
+                "```",
                 ``,
-                `### Promote`,
-                `This build is published as a **pre-release**, so it is not served by \`releases/latest\` yet. Once you've verified it, **close this issue as completed** — that automatically promotes [\`${tag}\`](${releaseUrl}) to the latest release and appends the changelog. No manual editing needed.`,
+                `### 3. Verify`,
+                "```bash",
+                `cd ${dir}`,
+                `sudo bash install.sh --check           # every exporter "binary present" + "service active", 0 fail (PREINIT only warns until step 4)`,
+                `cat /usr/lib/prometheus-exporters/versions.txt   # matches "Included exporters" in the release notes`,
+                `for p in ${ports}; do printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}\\n' "localhost:$p/metrics"; done   # 200 for each`,
+                `curl -s localhost:9100/metrics | grep -c '^node_zfs_'          # > 0 (ZFS collector works)`,
+                `curl -s localhost:9633/metrics | grep -c '^smartctl_device{'   # one per disk`,
+                `curl -s localhost:9290/metrics | grep '^ipmi_up'              # 1 per collector with a BMC, 0 without`,
+                "```",
+                ``,
+                `### 4. Reboot and re-verify`,
+                "```bash",
+                `sudo reboot`,
+                "```",
+                `After it is back up:`,
+                "```bash",
+                `cd ${dir}`,
+                `sudo bash install.sh --check           # "PREINIT completed this boot", every exporter active, 0 fail`,
+                `for p in ${ports}; do printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}\\n' "localhost:$p/metrics"; done   # 200 for each`,
+                "```",
+                ``,
+                `### 5. Report and sign off`,
+                `Comment with \`cat /etc/version\`, BMC or not, and the step 4 output of \`sudo bash install.sh --check\` and the port loop.`,
+                `- Works: close this issue as **completed**. That promotes [\`${tag}\`](${releaseUrl}) to Latest (what the default install fetches) and appends the changelog.`,
+                `- Broken: comment what failed, then close as **not planned**. The release stays an unpromoted pre-release.`,
+                ``,
+                `Afterwards, to keep only some exporters: \`cd ${dir} && sudo bash install.sh --disable=nut_exporter,blackbox_exporter,snmp_exporter,ipmi_exporter prometheus-exporters.raw\` (always pass the .raw, or it reinstalls Latest). Then \`rm -rf ${dir}\`.`,
               ].join('\n'),
             });
             console.log(`Created hardware-test issue for ${tag}`);
