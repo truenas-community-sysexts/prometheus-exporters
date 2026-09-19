@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Validate that .github/tracked-versions.json has the shape the rest of the
-# CI machinery (check-releases.yml, build.yml) assumes.
+# CI machinery assumes: check-releases.yml and build.yml read the `debian`,
+# `freeipmi` and `exporters` blocks; build.yml (hardware-test issues) and
+# promote.yml read the `trains` list.
 #
 # Run locally:
 #   .github/scripts/validate-tracked-versions.sh
@@ -93,6 +95,37 @@ for name, spec in exporters.items():
             if not isinstance(cfg.get(key), str) or not cfg[key].strip():
                 fail(f"exporter {name!r}: config.{key} missing or empty")
 
+# --- trains: every TrueNAS train a release supports. build.yml opens one
+# hardware-test issue per train for each release, and promote.yml writes
+# `verified-train: <key>` when one closes as completed.
+trains = data.get("trains")
+if not isinstance(trains, list) or not trains:
+    fail("'trains' missing or not a non-empty list")
+keys, names = set(), set()
+for i, t in enumerate(trains):
+    where = f"trains[{i}]"
+    if not isinstance(t, dict):
+        fail(f"{where} is not an object")
+    key = t.get("key")
+    # Shape only. That each key is one get.sh's truenas_train_key can
+    # produce is tested against the shell function itself
+    # (tests/test_release_selection.py), so the rule lives in one place.
+    if not isinstance(key, str) or not re.match(r"^\d+(\.\d+)?$", key):
+        fail(f"{where}.key missing or malformed (got {key!r}); expected e.g. 25.10 or 26")
+    if key in keys:
+        fail(f"{where}.key {key!r} is listed twice")
+    keys.add(key)
+    name = t.get("name")
+    if not isinstance(name, str) or not name.strip():
+        fail(f"{where}.name missing or empty (got {name!r}); expected e.g. 'TrueNAS 25.10'")
+    if name in names:
+        fail(f"{where}.name {name!r} is listed twice (issue titles and the duplicate check use it)")
+    names.add(name)
+    channel = t.get("channel")
+    if channel not in ("stable", "preview"):
+        fail(f"{where}.channel must be 'stable' or 'preview' (got {channel!r})")
+
 n = len(exporters)
-print(f"tracked-versions OK: {n} exporters on Debian {suite}, freeipmi={freeipmi['package']}")
+summary = ", ".join(f"{t['key']} ({t['channel']})" for t in trains)
+print(f"tracked-versions OK: {n} exporters on Debian {suite}, freeipmi={freeipmi['package']}; trains {summary}")
 PY

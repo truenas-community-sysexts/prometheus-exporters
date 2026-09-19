@@ -5,6 +5,18 @@
   "freeipmi": {
     "package": "freeipmi-tools"
   },
+  "trains": [
+    {
+      "key": "25.10",
+      "name": "TrueNAS 25.10",
+      "channel": "stable"
+    },
+    {
+      "key": "26",
+      "name": "TrueNAS 26 beta",
+      "channel": "preview"
+    }
+  ],
   "exporters": {
     "node_exporter": {
       "repo": "prometheus/node_exporter",
