@@ -3,7 +3,25 @@
 Start with the built-in probe:
 
 ```bash
-sudo ./install.sh --check
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
+  | sudo bash -s -- --check
+```
+
+## `No release is approved for TrueNAS train <train> yet`
+
+`get.sh` (and `install.sh`, `uninstall.sh` or `restore.sh` run without
+`--release`) only uses a release that a hardware test approved for this box's
+TrueNAS train: the train is the major version from 26 on (every 26.x, betas
+included) and major.minor before that (25.10). No release is approved for this
+train yet, so it stopped rather than install something untested. The message
+lists the newest releases still waiting and links the open hardware-test
+issues; each issue title names its train. Testing one on this train and
+closing it as completed approves that release here. To install a specific
+release anyway, pin it (at your own risk):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
+  | sudo bash -s -- --release=vYYYY.MM.DD-rN --enable=node_exporter
 ```
 
 ## An exporter isn't running
