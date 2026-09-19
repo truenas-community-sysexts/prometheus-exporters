@@ -1,15 +1,42 @@
 #!/usr/bin/env bash
-# Restores the original state by stopping all exporters and removing the
-# prometheus-exporters.raw sysext, its PREINIT registration, and persistent config.
+# Install the Prometheus exporters sysext on TrueNAS from the newest release
+# that a hardware test approved for this box's TrueNAS train.
 #
-# It sources prometheus-exporters-lib.sh from beside itself. Run on its own
-# (curl | bash), it fetches the lib from --release=TAG, else from the newest
-# release a hardware test approved for this box's TrueNAS train.
+#   curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh | sudo bash -s -- --enable=node_exporter,smartctl_exporter
+#
+# Arguments go after `bash -s --` and pass through to the installer:
+#
+#   ... | sudo bash -s -- --enable=all --pool=fast    # any install.sh flag
+#   ... | sudo bash -s -- --check                     # probe an existing install
+#   ... | sudo bash -s -- --release=v2026.07.15-r5    # that release, no selection
+#   ... | sudo bash -s -- --uninstall                 # remove it with the approved
+#                                                     # release's uninstall.sh
+#
+# What it does:
+#   1. Reads the TrueNAS version (midclt call system.info) and derives the
+#      train: the major version from 26 on (every 26.x release, betas
+#      included, is train 26), major.minor before that (25.10).
+#   2. Lists this repo's releases and picks the newest one approved for that
+#      train. A hardware test on a train approves a release for that train
+#      only (promote.yml writes a verified-train marker into its notes). A
+#      full release with no marker predates per-train sign-off and counts for
+#      every train. Nothing else is ever installed: with no approved release
+#      for the train it stops and points at the open hardware tests.
+#   3. Downloads THAT release's install.sh and prometheus-exporters-lib.sh
+#      side by side (or, with --uninstall, its uninstall.sh, restore.sh and
+#      lib) and runs the script with your arguments plus --release=<tag>, so
+#      the image the installer downloads comes from the same release. An
+#      installer from before per-train sign-off has no --release flag: for
+#      those, get.sh downloads the release's image itself, checks its sha256
+#      and hands the installer the local file.
+#
+# --release=TAG skips steps 1 and 2 and uses TAG as given. --repo=OWNER/NAME
+# (or PROMETHEUS_EXPORTERS_REPO) selects and downloads from a fork instead.
 
 set -euo pipefail
 
 REPO="${PROMETHEUS_EXPORTERS_REPO:-truenas-community-sysexts/prometheus-exporters}"
-RELEASE_TAG=""
+WORK_DIR=""
 
 # BEGIN approved-release (a verbatim copy lives in get.sh, scripts/install.sh,
 # scripts/uninstall.sh and scripts/restore.sh, each a self-contained curl|bash
@@ -192,109 +219,87 @@ approved_release_tag() {
 }
 # END approved-release
 
-for arg in "$@"; do
-    case "$arg" in
-        --release=*)
-            RELEASE_TAG="${arg#*=}"
-            [ -n "$RELEASE_TAG" ] || { echo "ERROR: --release= requires a tag, e.g. --release=v2026.07.15-r5" >&2; exit 2; }
-            ;;
-        --help)
-            echo "Usage: sudo ./restore.sh [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --release=TAG  Fetch the lib from that release when it is not beside"
-            echo "                 this script (default: the newest release approved for"
-            echo "                 this box's TrueNAS train)"
-            echo "  --help         Show this help"
-            echo ""
-            echo "Stops all bundled exporters, removes the sysext, deregisters the"
-            echo "PREINIT script, and deletes /mnt/*/.config/prometheus-exporters."
-            exit 0 ;;
-        *) echo "ERROR: unknown option: $arg (see --help)" >&2; exit 2 ;;
-    esac
-done
-
-if [ "$(id -u 2>/dev/null)" != "0" ]; then
-    echo "ERROR: must run as root (use sudo)" >&2; exit 1
-fi
-
-_source_pe_lib() {
-    local dir
-    dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || dir=""
-    if [ -n "$dir" ] && [ -f "${dir}/prometheus-exporters-lib.sh" ]; then
-        # shellcheck source=scripts/prometheus-exporters-lib.sh
-        source "${dir}/prometheus-exporters-lib.sh"; return 0
-    fi
-    # Not beside it (curl | bash): the lib of the pinned or approved release.
-    local tmp tag="$RELEASE_TAG"
-    if [ -z "$tag" ]; then
-        tag=$(approved_release_tag) || return 1
-    fi
-    tmp=$(mktemp /tmp/pe-lib.XXXXXXXXXX)
-    if curl -fsSL --max-time 30 \
-           "https://github.com/${REPO}/releases/download/${tag}/prometheus-exporters-lib.sh" \
-           -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-        # shellcheck source=scripts/prometheus-exporters-lib.sh
-        source "$tmp"; rm -f "$tmp"; return 0
-    fi
-    rm -f "$tmp"; return 1
+# One asset of release $1 into $WORK_DIR.
+fetch_asset() {
+    curl -fsSL --retry 3 --max-time 600 -o "${WORK_DIR}/$2" \
+        "https://github.com/${REPO}/releases/download/$1/$2" \
+        || { echo "ERROR: could not download $2 from release $1" >&2; return 1; }
 }
-_source_pe_lib || { echo "ERROR: Could not load prometheus-exporters-lib.sh." >&2; exit 1; }
 
-echo "=== Removing prometheus-exporters sysext ==="
+# Whether install.sh installs an image with these arguments: --check, --list
+# and --help exit before it needs one, and a positional argument is the
+# user's own local image.
+wants_image() {
+    local a
+    for a in "$@"; do
+        case "$a" in
+            --check|--list|--help) return 1 ;;
+            -*) ;;
+            *) return 1 ;;
+        esac
+    done
+    return 0
+}
 
-# Stop every exporter service the sysext provides (whether enabled or not).
-echo "Stopping exporter services..."
-AVAIL="$(pe_available_exporters)"
-if [ -n "$AVAIL" ]; then
-    while IFS= read -r name; do
-        [ -z "$name" ] && continue
-        systemctl stop "${name}.service" 2>/dev/null || true
-    done <<<"$AVAIL"
-else
-    # Manifest gone (already unmerged?) -- stop the known units by name.
-    systemctl stop 'node_exporter.service' 'smartctl_exporter.service' 'nut_exporter.service' \
-                   'blackbox_exporter.service' 'snmp_exporter.service' 'ipmi_exporter.service' 2>/dev/null || true
-fi
+main() {
+    local mode=install tag="" arg repo_arg="" asset
+    local -a args=()
+    for arg in "$@"; do
+        case "$arg" in
+            --uninstall) mode=uninstall ;;
+            --release=*)
+                tag="${arg#*=}"
+                [ -n "$tag" ] || { echo "ERROR: --release= needs a tag, e.g. --release=v2026.07.15-r5" >&2; exit 2; }
+                ;;
+            --repo=*)
+                REPO="${arg#*=}"
+                [ -n "$REPO" ] || { echo "ERROR: --repo= needs OWNER/NAME" >&2; exit 2; }
+                repo_arg="$arg"
+                ;;
+            *) args+=("$arg") ;;
+        esac
+    done
 
-# Remove the sysext symlink and unmerge; re-merge any other sysexts that the
-# blanket unmerge would otherwise leave deactivated.
-echo "Removing sysext..."
-rm -f /run/extensions/prometheus-exporters.raw
-systemd-sysext unmerge 2>/dev/null || true
-if ls /run/extensions/*.raw >/dev/null 2>&1; then
-    echo "Re-merging remaining sysexts..."
-    systemd-sysext refresh 2>/dev/null || echo "WARNING: Failed to re-merge remaining sysexts"
-    ldconfig 2>/dev/null || true
-fi
-rm -f /run/prometheus-exporters
-systemctl daemon-reload 2>/dev/null || true
-
-echo ""
-echo "=== Cleaning up persistence ==="
-INIT_LOOKUP=$(pe_init_script_lookup)
-if [ "$INIT_LOOKUP" = "error" ]; then
-    echo "WARNING: Could not query TrueNAS middleware, skipping init script deregistration"
-    INIT_ID=""
-else
-    INIT_ID="${INIT_LOOKUP%%|*}"
-fi
-if [ -n "$INIT_ID" ]; then
-    midclt call initshutdownscript.delete "$INIT_ID" 2>/dev/null \
-        && echo "Init script deregistered (id: ${INIT_ID})" \
-        || echo "WARNING: Failed to deregister init script"
-elif [ "$INIT_LOOKUP" != "error" ]; then
-    echo "No init script found to deregister"
-fi
-
-for d in /mnt/*/.config/prometheus-exporters; do
-    if [ -d "$d" ]; then
-        echo "Removing persistent config: $d"
-        rm -rf "$d"
+    if [ -n "$tag" ]; then
+        echo "Release ${tag} (pinned with --release)" >&2
+    else
+        tag=$(approved_release_tag) || exit 1
     fi
-done
 
-echo "Persistence cleanup complete"
-echo ""
-echo "=== Restore complete ==="
-echo "All bundled exporters stopped and removed."
+    WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pe-get.XXXXXX")
+    trap 'rm -rf "$WORK_DIR"' EXIT
+
+    if [ "$mode" = uninstall ]; then
+        # uninstall.sh runs the restore.sh beside it, which sources the lib
+        # beside it, so all three come from this release. They take no
+        # --release or --repo: they only undo the install.
+        for asset in uninstall.sh restore.sh prometheus-exporters-lib.sh; do
+            fetch_asset "$tag" "$asset" || exit 1
+        done
+        bash "${WORK_DIR}/uninstall.sh" ${args[@]+"${args[@]}"}
+        return
+    fi
+
+    # install.sh sources the lib beside it instead of downloading one.
+    for asset in install.sh prometheus-exporters-lib.sh; do
+        fetch_asset "$tag" "$asset" || exit 1
+    done
+    [ -z "$repo_arg" ] || args+=("$repo_arg")
+    if grep -qF -- '--release=*)' "${WORK_DIR}/install.sh"; then
+        args+=("--release=${tag}")
+    elif wants_image ${args[@]+"${args[@]}"}; then
+        # An installer from before per-train sign-off downloads GitHub's
+        # Latest unless it is given a local image, so hand it this release's.
+        fetch_asset "$tag" prometheus-exporters.raw || exit 1
+        fetch_asset "$tag" prometheus-exporters.raw.sha256 || exit 1
+        (cd "$WORK_DIR" && sha256sum -c --quiet prometheus-exporters.raw.sha256) \
+            || { echo "ERROR: prometheus-exporters.raw from release ${tag} failed its checksum" >&2; exit 1; }
+        echo "Release ${tag}: image downloaded and checksum OK" >&2
+        args+=("${WORK_DIR}/prometheus-exporters.raw")
+    fi
+    bash "${WORK_DIR}/install.sh" ${args[@]+"${args[@]}"}
+}
+
+# Called on the last line, so bash has read this whole script before
+# anything runs and the installer cannot swallow the rest of it from stdin.
+main "$@"
