@@ -30,3 +30,7 @@ build/
 
 # Plan/spec scratchpads from superpowers planning skills.
 docs/superpowers/
+
+# Python bytecode from running the test suite locally
+__pycache__/
+*.pyc
