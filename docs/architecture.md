@@ -78,5 +78,30 @@ Running the PREINIT start every boot *is* the persistence - it replaces
 
 See [build.md](build.md): `resolve` (read suite) → `build` (download exporters
 + bundle FreeIPMI in a Debian container, assemble, smoke-test the squashfs) →
-`release`. A daily job bumps exporter versions and triggers an unverified build
-gated behind a hardware-test issue.
+`release` (publish a pre-release, open one hardware-test issue per TrueNAS
+train). A daily job bumps exporter versions and triggers a build.
+
+## Which release a box installs
+
+The one-liner is [`get.sh`](../get.sh) on `main`. It derives the box's TrueNAS
+train from `midclt call system.info` (the major version from 26 on, major.minor
+before), lists the releases through the GitHub API, and picks the newest one
+approved for that train: a `verified-train` marker for the train in its notes
+(written by `promote.yml` when that train's hardware-test issue closes as
+completed), or a full release with no marker at all (from before per-train
+approval, so approved for every train). Nothing unapproved is installed; with
+no match it stops and links the open hardware tests.
+
+It then downloads that release's `install.sh` and `prometheus-exporters-lib.sh`
+side by side and runs `install.sh` with the user's arguments plus
+`--release=<tag>`, so the image comes from the same release. `--uninstall` runs
+the release's `uninstall.sh`, `restore.sh` and lib the same way. An `install.sh`
+from before per-train approval has no `--release`, so `get.sh` downloads that
+release's image, checks its sha256 and passes the local file instead.
+
+`install.sh`, `uninstall.sh` and `restore.sh` run on their own resolve their
+release by the same rule (`--release=TAG`, else the newest approved). The
+selection code is one block copied verbatim into all four scripts, since each
+must work alone through `curl | bash`; `tests/test_release_selection.py` fails
+CI if the copies differ. The block matches nvidia-driver-support's, so every
+repo applies the same rule.
