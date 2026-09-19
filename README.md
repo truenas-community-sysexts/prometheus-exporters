@@ -35,31 +35,35 @@ Exporters ship **disabled**; you choose which to run with `--enable`. The select
 ### Install + enable
 Install and turn on the exporters you want (comma-separated, or `all`):
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/prometheus-exporters/releases/latest/download/install.sh \
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
   | sudo bash -s -- --enable=node_exporter,smartctl_exporter
 ```
 With an explicit pool:
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/prometheus-exporters/releases/latest/download/install.sh -o install.sh
-sudo bash install.sh --enable=node_exporter --pool=fast
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
+  | sudo bash -s -- --enable=node_exporter --pool=fast
 ```
 
+`get.sh` runs the installer from the newest release that a hardware test approved for your TrueNAS train (25.10, or 26 for every 26.x including betas). A release is approved per train: until a new one passes its hardware test on your train, you keep getting the last approved one, and nothing untested is installed. See [docs/install.md](docs/install.md#which-release-is-installed).
+
 ### Manage which run
+Run the same one-liner with other flags (they go after `bash -s --`):
 ```bash
-sudo ./install.sh --list                       # available + enabled
-sudo ./install.sh --enable=blackbox_exporter    # add one
-sudo ./install.sh --disable=ipmi_exporter       # remove one
+GET=https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh
+curl -fsSL "$GET" | sudo bash -s -- --list                      # available + enabled
+curl -fsSL "$GET" | sudo bash -s -- --enable=blackbox_exporter  # add one
+curl -fsSL "$GET" | sudo bash -s -- --disable=ipmi_exporter     # remove one
 ```
 
 ### Verify
 ```bash
-sudo ./install.sh --check
+curl -fsSL "$GET" | sudo bash -s -- --check
 curl -s localhost:9100/metrics | head           # node_exporter
 ```
 
 ### Uninstall
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/prometheus-exporters/releases/latest/download/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh | sudo bash -s -- --uninstall
 ```
 
 ## How It Works

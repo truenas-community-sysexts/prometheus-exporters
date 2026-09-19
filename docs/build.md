@@ -8,7 +8,7 @@ no source compilation here.
 
 `.github/workflows/build.yml`:
 
-1. **resolve**: reads `debian.suite` and the `mark_latest` input.
+1. **resolve**: reads `debian.suite` (or the `suite` input).
 2. **build**: runs in a `debian:<suite>-slim` container and:
    - downloads each exporter's static `linux-amd64` release asset (expanding
      the `{version}`/`{vnum}` templates) into `/usr/bin`,
@@ -23,11 +23,34 @@ no source compilation here.
      `--version`-runnable, seed configs present, FreeIPMI bundled with all
      libraries resolved),
    - uploads the artifact.
-3. **release**: publishes a GitHub release with the `.raw`, its `.sha256`, and
-   the install scripts. `make_latest` follows the `mark_latest` input.
+3. **release**: publishes a GitHub **pre-release** tagged
+   `v<YYYY.MM.DD>-r<run>` with the `.raw`, its `.sha256`, and the scripts
+   `get.sh` uses (`install.sh`, `prometheus-exporters-lib.sh`, `uninstall.sh`,
+   `restore.sh`), then opens one hardware-test issue per TrueNAS train in
+   `tracked-versions.json` (`trains`): label `hardware-test` for a stable train,
+   `preview-hardware-test` for a preview one.
 
-Run a verified build from the Actions tab (**Build prometheus-exporters
-Sysext** → *Run workflow*, `mark_latest=true`).
+Run a build from the Actions tab (**Build prometheus-exporters Sysext** →
+*Run workflow*). There is no publish-straight-to-Latest option: every release
+starts as a pre-release and is approved per train (below).
+
+## Per-train approval
+
+One release serves every TrueNAS train (the exporters are userspace only), but
+a hardware test approves it for its own train only:
+
+- Each hardware-test issue names its train in the title and carries
+  `<!-- release-tag -->` and `<!-- train -->` markers.
+- Closing it as **completed** runs `promote.yml`, which appends
+  `<!-- verified-train: <key> -->` to the release notes. On the release's first
+  approval the same update turns the pre-release into a full release and
+  appends the changelog, so a full release never exists without a marker.
+- GitHub's "Latest" follows the newest release approved for a stable train. It
+  is cosmetic: `get.sh` and the scripts select by the markers, not by Latest.
+- A full release with **no** marker counts as approved for every train. That is
+  how the releases from before per-train approval stay installable, and why
+  there is no way to publish straight to Latest: such a release would reach
+  every box untested.
 
 ## `tracked-versions.json`
 
@@ -35,6 +58,10 @@ Sysext** → *Run workflow*, `mark_latest=true`).
 {
   "debian": { "suite": "bookworm" },          // FreeIPMI is built against this
   "freeipmi": { "package": "freeipmi-tools" },
+  "trains": [                                 // one hardware-test issue each per release
+    { "key": "25.10", "name": "TrueNAS 25.10", "channel": "stable" },
+    { "key": "26", "name": "TrueNAS 26 beta", "channel": "preview" }
+  ],
   "exporters": {
     "node_exporter": {
       "repo": "prometheus/node_exporter",
@@ -58,7 +85,16 @@ Sysext** → *Run workflow*, `mark_latest=true`).
 Template tokens: `{version}` = the tag (e.g. `v1.11.1`), `{vnum}` = without the
 leading `v` (e.g. `1.11.1`). If `extract` is omitted the downloaded asset *is*
 the binary. `config` (optional) seeds an example config from inside the tarball.
-The shape is enforced by `.github/scripts/validate-tracked-versions.sh`.
+
+`trains` lists every TrueNAS train a release supports. `key` is the train key
+`get.sh` derives from the TrueNAS version (the major from 26 on, major.minor
+before, e.g. `25.10`) and the value `promote.yml` writes into the
+`verified-train` marker; `name` goes into the issue title; `channel` is
+`stable` or `preview` and picks the issue label. When TrueNAS 26.0 goes GA, `26`
+becomes a stable train.
+
+The shape is enforced by `.github/scripts/validate-tracked-versions.sh`, and
+`tests/` (run by the lint workflow) checks each key is one `get.sh` can derive.
 
 ## Adding an exporter
 
@@ -77,9 +113,9 @@ The shape is enforced by `.github/scripts/validate-tracked-versions.sh`.
 
 `.github/workflows/check-releases.yml` runs daily: for each exporter it queries
 the latest upstream release and, if newer than tracked, bumps `version` (the
-asset/extract templates handle the rest), pushes, and dispatches `build.yml`
-with `mark_latest=false`. That publishes a release without marking it latest and
-opens a `hardware-test` issue; promote it to *Latest* after verifying.
+asset/extract templates handle the rest), pushes, and dispatches `build.yml`.
+That publishes a pre-release and opens one hardware-test issue per train;
+closing each as completed after testing approves it for that train.
 
 Pushing to `main` needs a `CHECK_BUILDS` repository secret (a PAT that can
 bypass the branch ruleset); the default `GITHUB_TOKEN` is used for read-only

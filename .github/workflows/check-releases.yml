@@ -79,6 +79,8 @@ jobs:
             git push || { echo "::error title=push::push failed after rebase"; exit 1; }
           fi
 
+      # build.yml always publishes a prerelease and opens one hardware-test
+      # issue per TrueNAS train; each train's sign-off approves it there.
       - name: Trigger build
         if: steps.check.outputs.changed == '1'
         uses: actions/github-script@v9
@@ -90,6 +92,5 @@ jobs:
               repo: context.repo.repo,
               workflow_id: 'build.yml',
               ref: 'main',
-              inputs: { mark_latest: 'false' }
             });
-            console.log('Dispatched build.yml (mark_latest=false) after exporter version bump');
+            console.log('Dispatched build.yml after exporter version bump');

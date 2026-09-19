@@ -1,5 +1,19 @@
 name: Build prometheus-exporters Sysext
 
+# Builds prometheus-exporters.raw and publishes it as a release tagged
+# v<YYYY.MM.DD>-r<run>. One release serves every TrueNAS train (userspace
+# only), but it is approved per train:
+#   - it is always published as a PRERELEASE, and one hardware-test issue is
+#     opened per train in .github/tracked-versions.json (`hardware-test` for a
+#     stable train, `preview-hardware-test` for a preview one);
+#   - closing a train's issue as completed approves the release for that
+#     train's boxes only (promote.yml adds a verified-train marker to its
+#     notes); get.sh installs only releases approved for the box's train.
+# There is no publish-straight-to-Latest option: a full release with no
+# verified-train marker counts as approved for every train (that is how
+# releases from before per-train sign-off stay installable), so it would
+# reach every box untested.
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,14 +21,6 @@ on:
         description: 'Debian suite to bundle FreeIPMI against (blank = tracked)'
         required: false
         default: ''
-      mark_latest:
-        description: 'true = publish straight to Latest; false (default) = prerelease + hardware-test gate'
-        required: false
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-        default: 'false'
 
   workflow_call:
     inputs:
@@ -22,10 +28,6 @@ on:
         type: string
         required: false
         default: ''
-      mark_latest:
-        type: string
-        required: false
-        default: 'false'
 
 permissions:
   contents: write
@@ -47,8 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       suite: ${{ steps.params.outputs.suite }}
-      mark_latest: ${{ steps.params.outputs.mark_latest }}
-      prerelease: ${{ steps.params.outputs.prerelease }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -59,22 +59,11 @@ jobs:
         id: params
         env:
           INPUT_SUITE: ${{ inputs.suite }}
-          INPUT_MARK_LATEST: ${{ inputs.mark_latest }}
         run: |
           TRACKED_SUITE=$(jq -r '.debian.suite' .github/tracked-versions.json)
           SUITE="${INPUT_SUITE:-$TRACKED_SUITE}"
-          MARK_LATEST="${INPUT_MARK_LATEST:-true}"
-          # An unverified auto-build (mark_latest=false) is published as a
-          # PRERELEASE so GitHub excludes it from /releases/latest and
-          # releases/latest/download until a human promotes it. make_latest
-          # alone does not hold this gate with action-gh-release@v3.
-          if [ "$MARK_LATEST" = "true" ]; then PRERELEASE="false"; else PRERELEASE="true"; fi
-          {
-            echo "suite=${SUITE}"
-            echo "mark_latest=${MARK_LATEST}"
-            echo "prerelease=${PRERELEASE}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Resolved: suite=${SUITE} mark_latest=${MARK_LATEST} prerelease=${PRERELEASE}"
+          echo "suite=${SUITE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: suite=${SUITE}"
 
   build:
     needs: resolve
@@ -270,6 +259,9 @@ jobs:
           BUILD_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
         run: |
+          TAG="v${BUILD_DATE}-r${RUN_NUMBER}"
+          TRAINS=$(jq -r '[.trains[].name] | join(", ")' .github/tracked-versions.json)
+          GET="https://raw.githubusercontent.com/${REPO}/main/get.sh"
           {
             echo "## prometheus-exporters sysext for TrueNAS SCALE"
             echo ""
@@ -288,9 +280,17 @@ jobs:
             cat "${SYSEXT_ROOT}/usr/lib/prometheus-exporters/versions.txt"
             echo '```'
             echo ""
+            echo "### Approval"
+            echo "This release starts as a pre-release. A hardware test on a TrueNAS train (${TRAINS}) approves it for that train's boxes only; until then the one-liner keeps installing the newest release approved for each train."
+            echo ""
             echo "### Install + enable"
+            echo "The newest release approved for your TrueNAS train:"
             echo '```bash'
-            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --enable=node_exporter,smartctl_exporter"
+            echo "curl -fsSL ${GET} | sudo bash -s -- --enable=node_exporter,smartctl_exporter"
+            echo '```'
+            echo "This exact release:"
+            echo '```bash'
+            echo "curl -fsSL ${GET} | sudo bash -s -- --release=${TAG} --enable=node_exporter,smartctl_exporter"
             echo '```'
             echo ""
             echo "### Licensing"
@@ -313,10 +313,14 @@ jobs:
     needs: [resolve, build]
     runs-on: ubuntu-latest
     steps:
+      # scripts/ for the release assets, .github/ for tracked-versions.json
+      # (the trains the hardware-test issues are opened for).
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            .github
           sparse-checkout-cone-mode: true
       - name: Download build artifacts
         uses: actions/download-artifact@v8
@@ -329,6 +333,9 @@ jobs:
           tag_name: v${{ needs.build.outputs.build_date }}-r${{ needs.build.outputs.run_number }}
           name: "prometheus-exporters ${{ needs.build.outputs.build_date }} (r${{ needs.build.outputs.run_number }})"
           body_path: release-notes.md
+          # Everything get.sh runs or stages from a release: install.sh + lib
+          # (+ the image and checksum for install.sh to download), and
+          # uninstall.sh + restore.sh + lib (tests/test_get_sh.py checks this).
           files: |
             prometheus-exporters.raw
             prometheus-exporters.raw.sha256
@@ -341,21 +348,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish the draft (prerelease gate, or Latest on override)
+      # Publish the draft as a prerelease, always: it is approved per train
+      # only by that train's hardware-test issue (promote.yml).
+      - name: Publish the draft as a prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           REL_ID: ${{ steps.release.outputs.id }}
-          MARK_LATEST: ${{ needs.resolve.outputs.mark_latest }}
-        run: |
-          if [ "$MARK_LATEST" = "true" ]; then
-            gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -f make_latest=true
-          else
-            gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -F prerelease=true
-          fi
+        run: gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -F prerelease=true
 
-      - name: Create hardware-test issue for auto-build
-        if: needs.resolve.outputs.mark_latest == 'false'
+      - name: Open hardware-test issues, one per train (prerelease gate)
         uses: actions/github-script@v9
         env:
           BUILD_DATE: ${{ needs.build.outputs.build_date }}
@@ -363,92 +365,115 @@ jobs:
         with:
           script: |
             const tag = `v${process.env.BUILD_DATE}-r${process.env.RUN_NUMBER}`;
-            // Title: what to test | on what | which build. The tag goes last,
-            // verbatim: the duplicate check below matches on it.
-            const title = `Hardware test: Prometheus exporters ${process.env.BUILD_DATE} | any TrueNAS 25.10+ system, no special hardware | ${tag}`;
-            const releaseUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${tag}`;
-            try {
-              await github.rest.issues.createLabel({
-                owner: context.repo.owner, repo: context.repo.repo,
-                name: 'hardware-test', color: 'FBCA04',
-                description: 'Auto-build awaiting verification on real hardware',
-              });
-            } catch (e) { if (e.status !== 422) throw e; }
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: 'hardware-test', per_page: 100,
-            });
-            if (existing.data.some(i => i.title.includes(tag))) {
-              console.log(`Open hardware-test issue already exists for ${tag}, skipping`); return;
+            const { owner, repo } = context.repo;
+            const releaseUrl = `https://github.com/${owner}/${repo}/releases/tag/${tag}`;
+            const fs = require('fs');
+            // One issue per supported TrueNAS train: a hardware test approves this
+            // release for its own train's boxes only (promote.yml). Stable trains use
+            // the hardware-test label, preview (beta) trains preview-hardware-test.
+            const { trains } = JSON.parse(fs.readFileSync('.github/tracked-versions.json', 'utf8'));
+            const labelOf = (t) => (t.channel === 'preview' ? 'preview-hardware-test' : 'hardware-test');
+            const labels = {
+              'hardware-test': { color: 'FBCA04',
+                description: 'Build awaiting verification on real hardware' },
+              'preview-hardware-test': { color: '5319E7',
+                description: 'Build awaiting verification on real hardware, on a TrueNAS preview (beta) train' },
+            };
+            for (const name of new Set(trains.map(labelOf))) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name, ...labels[name] });
+              } catch (e) { if (e.status !== 422) throw e; }
             }
-            // Test instructions. Every command must work exactly as written on
-            // a TrueNAS box: a human validator pastes them. The scripts are
-            // downloaded to /var/tmp (survives the step 4 reboot, unlike /tmp)
-            // so `install.sh --check` can be re-run from there after reboot.
-            // Every install.sh run must pass the local .raw: without it the
-            // script re-downloads Latest and replaces the build under test.
-            const base = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}`;
-            const dir = '/var/tmp/prometheus-exporters-test';
+            // Duplicate check, keyed on tag AND train: an open issue whose markers
+            // (or title) name both already covers the pair. An open issue for this tag
+            // with no train marker and no train in its title is the single issue from
+            // before per-train sign-off: it covered every train (promote.yml still
+            // approves it for all of them), so it suppresses them all.
+            const open = [];
+            for (const name of Object.keys(labels)) {
+              open.push(...(await github.rest.issues.listForRepo({ owner, repo,
+                state: 'open', labels: name, per_page: 100 })).data);
+            }
+            const issueTag = (i) => ((i.body || '').match(/<!--\s*release-tag:\s*(\S+?)\s*-->/) || [])[1] || '';
+            const issueTrain = (i) => ((i.body || '').match(/<!--\s*train:\s*(\S+?)\s*-->/) || [])[1] || '';
+            const covers = (i, t) => {
+              if (issueTag(i) !== tag && !i.title.endsWith(` ${tag}`)) return false;
+              if (issueTrain(i)) return issueTrain(i) === t.key;
+              const named = trains.find((x) => i.title.includes(`any ${x.name} system,`));
+              return named ? named.key === t.key : true;
+            };
+            // Test instructions. Every command must work exactly as written on a
+            // TrueNAS box: a human validator pastes them. The one-liner runs main's
+            // get.sh (what users run); --release makes it run this release's
+            // install.sh, which then downloads this release's image.
+            const inst = `https://raw.githubusercontent.com/${owner}/${repo}/main/get.sh`;
             const ports = '9100 9633 9199 9115 9116 9290';
-
-            await github.rest.issues.create({
-              owner: context.repo.owner, repo: context.repo.repo, title,
-              labels: ['hardware-test'],
-              body: [
-                `An auto-build published a new release that needs verification before being promoted to **Latest**.`,
-                ``,
-                `**Release:** [${tag}](${releaseUrl})`,
-                `<!-- release-tag: ${tag} -->`,
-                ``,
-                `### Requirements`,
-                `- Any TrueNAS 25.10 or newer box with a data pool, including 26 betas. Userspace only (no kernel module), so one build serves every train and kernel.`,
-                `- The test enables all six exporters (node 9100, smartctl 9633, nut 9199, blackbox 9115, snmp 9116, ipmi 9290). ipmi_exporter only reads sensors on a box with a BMC (\`/dev/ipmi0\`); without one it still runs and reports \`ipmi_up 0\`.`,
-                ``,
-                `### 1. Pre-checks`,
-                "```bash",
-                `cat /etc/version                       # 25.10 or newer`,
-                `sudo ss -ltnp | grep -E ':(${ports.split(' ').join('|')})\\s'   # empty, or only *_exporter from an earlier install`,
-                `ls -l /dev/ipmi0                       # present = BMC, so ipmi_exporter can read sensors`,
-                "```",
-                ``,
-                `### 2. Install this build`,
-                `It is a pre-release, so the default install (which fetches Latest) would not test it. Install it from its tag:`,
-                "```bash",
-                `BASE=${base}`,
-                `mkdir -p ${dir} && cd ${dir}`,
-                `for f in prometheus-exporters.raw prometheus-exporters.raw.sha256 install.sh prometheus-exporters-lib.sh; do curl -fsSLO "$BASE/$f"; done`,
-                `sha256sum -c prometheus-exporters.raw.sha256          # prometheus-exporters.raw: OK`,
-                `sudo bash install.sh --enable=all prometheus-exporters.raw   # add --pool=NAME if it asks; "started <name>" for all six`,
-                "```",
-                ``,
-                `### 3. Verify`,
-                "```bash",
-                `cd ${dir}`,
-                `sudo bash install.sh --check           # every exporter "binary present" + "service active", 0 fail (PREINIT only warns until step 4)`,
-                `cat /usr/lib/prometheus-exporters/versions.txt   # matches "Included exporters" in the release notes`,
-                `for p in ${ports}; do printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}\\n' "localhost:$p/metrics"; done   # 200 for each`,
-                `curl -s localhost:9100/metrics | grep -c '^node_zfs_'          # > 0 (ZFS collector works)`,
-                `curl -s localhost:9633/metrics | grep -c '^smartctl_device{'   # one per disk`,
-                `curl -s localhost:9290/metrics | grep '^ipmi_up'              # 1 per collector with a BMC, 0 without`,
-                "```",
-                ``,
-                `### 4. Reboot and re-verify`,
-                "```bash",
-                `sudo reboot`,
-                "```",
-                `After it is back up:`,
-                "```bash",
-                `cd ${dir}`,
-                `sudo bash install.sh --check           # "PREINIT completed this boot", every exporter active, 0 fail`,
-                `for p in ${ports}; do printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}\\n' "localhost:$p/metrics"; done   # 200 for each`,
-                "```",
-                ``,
-                `### 5. Report and sign off`,
-                `Comment with \`cat /etc/version\`, BMC or not, and the step 4 output of \`sudo bash install.sh --check\` and the port loop.`,
-                `- Works: close this issue as **completed**. That promotes [\`${tag}\`](${releaseUrl}) to Latest (what the default install fetches) and appends the changelog.`,
-                `- Broken: comment what failed, then close as **not planned**. The release stays an unpromoted pre-release.`,
-                ``,
-                `Afterwards, to keep only some exporters: \`cd ${dir} && sudo bash install.sh --disable=nut_exporter,blackbox_exporter,snmp_exporter,ipmi_exporter prometheus-exporters.raw\` (always pass the .raw, or it reinstalls Latest). Then \`rm -rf ${dir}\`.`,
-              ].join('\n'),
-            });
-            console.log(`Created hardware-test issue for ${tag}`);
+            const portLoop = `for p in ${ports}; do printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}\\n' "localhost:$p/metrics"; done   # 200 for each`;
+            for (const t of trains) {
+              const preview = t.channel === 'preview';
+              // Title: what to test | on what | which build. The train names the "on
+              // what"; the tag goes last, verbatim (the duplicate check matches it).
+              const title = `${preview ? 'Preview hardware test' : 'Hardware test'}: Prometheus exporters ${process.env.BUILD_DATE} | any ${t.name} system, no special hardware | ${tag}`;
+              const dup = open.find((i) => covers(i, t));
+              if (dup) {
+                console.log(`Open issue #${dup.number} already covers ${tag} on ${t.name}, skipping`);
+                continue;
+              }
+              const others = trains.filter((x) => x.key !== t.key).map((x) => x.name);
+              await github.rest.issues.create({ owner, repo, title, labels: [labelOf(t)],
+                body: [
+                  `The build smoke-tested this release in CI. This issue approves it for **${t.name}** boxes only: verify it **on real hardware, on a ${t.name} box**.${others.length ? ` ${others.join(', ')} ${others.length > 1 ? 'have their own issues' : 'has its own issue'} for this release.` : ''}`,
+                  ``,
+                  `**Release:** [${tag}](${releaseUrl})`,
+                  `**Train:** ${t.name} (\`cat /etc/version\` starts with \`${t.key}.\`)`,
+                  `<!-- release-tag: ${tag} -->`,
+                  `<!-- train: ${t.key} -->`,
+                  ``,
+                  `### Requirements`,
+                  `- A ${t.name} box with a data pool. The sysext is userspace only (no kernel module), so one build serves every train, but each train signs it off on its own.`,
+                  `- The test enables all six exporters (node 9100, smartctl 9633, nut 9199, blackbox 9115, snmp 9116, ipmi 9290). ipmi_exporter only reads sensors on a box with a BMC (\`/dev/ipmi0\`); without one it still runs and reports \`ipmi_up 0\`.`,
+                  ``,
+                  `### 1. Pre-checks`,
+                  "```bash",
+                  `cat /etc/version                       # starts with ${t.key}. (this issue's train)`,
+                  `sudo ss -ltnp | grep -E ':(${ports.split(' ').join('|')})\\s'   # empty, or only *_exporter from an earlier install`,
+                  `ls -l /dev/ipmi0                       # present = BMC, so ipmi_exporter can read sensors`,
+                  "```",
+                  ``,
+                  `### 2. Install this build`,
+                  `No hardware test has approved it for ${t.name} yet, so plain \`get.sh\` would install the newest approved release instead. Pin this build with \`--release\`:`,
+                  "```bash",
+                  `I=${inst}`,
+                  `curl -fsSL "$I" | sudo bash -s -- --release=${tag} --enable=all   # "Release: ${tag} (downloading from its assets)", "Checksum OK", "started <name>" for all six; add --pool=NAME if it asks`,
+                  "```",
+                  ``,
+                  `### 3. Verify`,
+                  "```bash",
+                  `curl -fsSL "$I" | sudo bash -s -- --release=${tag} --check   # every exporter "binary present" + "service active", 0 fail (PREINIT only warns until step 4)`,
+                  `cat /usr/lib/prometheus-exporters/versions.txt   # matches "Included exporters" in the release notes`,
+                  portLoop,
+                  `curl -s localhost:9100/metrics | grep -c '^node_zfs_'          # > 0 (ZFS collector works)`,
+                  `curl -s localhost:9633/metrics | grep -c '^smartctl_device{'   # one per disk`,
+                  `curl -s localhost:9290/metrics | grep '^ipmi_up'              # 1 per collector with a BMC, 0 without`,
+                  "```",
+                  ``,
+                  `### 4. Reboot and re-verify`,
+                  "```bash",
+                  `sudo reboot`,
+                  "```",
+                  `After it is back up:`,
+                  "```bash",
+                  `I=${inst}`,
+                  `curl -fsSL "$I" | sudo bash -s -- --release=${tag} --check   # "PREINIT completed this boot", every exporter active, 0 fail`,
+                  portLoop,
+                  "```",
+                  ``,
+                  `### 5. Report and sign off`,
+                  `Comment with \`cat /etc/version\`, BMC or not, and the step 4 output of \`--check\` and the port loop. Sign off here only for a test on ${t.name}.`,
+                  `- Works: close this issue as **completed**. That approves [\`${tag}\`](${releaseUrl}) for ${t.name} boxes: promote.yml adds a \`verified-train: ${t.key}\` marker to its notes, and \`get.sh\` then installs it there. The first train to approve a release also makes it a full release and appends the changelog.`,
+                  `- Broken: comment what failed, then close as **not planned**. Nothing changes: ${t.name} boxes keep the newest release approved for them.`,
+                  ``,
+                  `Afterwards, to keep only some exporters: \`curl -fsSL "$I" | sudo bash -s -- --release=${tag} --disable=nut_exporter,blackbox_exporter,snmp_exporter,ipmi_exporter\`.`,
+                ].join('\n') });
+              console.log(`Created ${labelOf(t)} issue for ${tag} on ${t.name}`);
+            }

@@ -3,14 +3,18 @@
 ## Quick install + enable
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/prometheus-exporters/releases/latest/download/install.sh \
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
   | sudo bash -s -- --enable=node_exporter,smartctl_exporter
 ```
 
-This downloads the latest `prometheus-exporters.raw`, verifies its checksum,
-merges it into `/usr`, copies it to your data pool, seeds default configs,
-starts the exporters you enabled, and registers a PREINIT script so they come
-back after reboots and TrueNAS updates.
+`get.sh` picks the newest release approved for your TrueNAS train (see
+[Which release is installed](#which-release-is-installed)) and runs that
+release's `install.sh`, which downloads the release's
+`prometheus-exporters.raw`, verifies its checksum, merges it into `/usr`, copies
+it to your data pool, seeds default configs, starts the exporters you enabled,
+and registers a PREINIT script so they come back after reboots and TrueNAS
+updates. Every option below goes after `bash -s --` and passes through to
+`install.sh`.
 
 Exporters ship **disabled** - nothing runs until you `--enable` it.
 
@@ -23,6 +27,7 @@ Exporters ship **disabled** - nothing runs until you `--enable` it.
 | `--list` | Show available and currently-enabled exporters |
 | `--pool=NAME` | ZFS pool for persistent config (`/mnt/NAME/.config/prometheus-exporters`) |
 | `--persist-path=PATH` | Exact persistent path; must be `/mnt/<pool>/.config/prometheus-exporters` |
+| `--release=TAG` | Install that release (e.g. `v2026.07.15-r5`) instead of the newest approved one |
 | `--repo=OWNER/NAME` | Download from a fork (also `PROMETHEUS_EXPORTERS_REPO` env) |
 | `--check` | Read-only probe of an existing install |
 | `--dry-run` | Validate without changing anything |
@@ -30,9 +35,49 @@ Exporters ship **disabled** - nothing runs until you `--enable` it.
 | `[path-to-.raw]` | Install a local image instead of downloading |
 
 `--enable`/`--disable` are **incremental** - they adjust the stored set, so you
-can add or remove one exporter without restating the rest. Re-running
-`install.sh` with no `--enable`/`--disable` keeps the current set and just
-re-applies/upgrades.
+can add or remove one exporter without restating the rest. Re-running the
+one-liner with no `--enable`/`--disable` keeps the current set and just
+re-applies/upgrades (to the newest release approved for your train).
+
+## Which release is installed
+
+Each release is approved **per TrueNAS train**. The train is the major version
+from 26 on (every 26.x release, betas included, is train `26`) and
+major.minor before that (`25.10`). A release starts as a pre-release with one
+hardware-test issue per supported train; closing a train's issue as completed
+approves it for that train's boxes only.
+
+`get.sh` reads the TrueNAS version (`midclt call system.info`), derives the
+train, and picks the newest release that is approved for it:
+
+- its notes carry `<!-- verified-train: <train> -->`, or
+- it is a full (non-pre-release) release with no `verified-train` marker at
+  all. Every release published before per-train approval is one of these, so
+  they stay approved for every train.
+
+Nothing else is installed, on stable or beta boxes: with no approved release
+for the train it stops and links the open hardware-test issues (see
+[troubleshooting](troubleshooting.md#no-release-is-approved-for-truenas-train-train-yet)).
+It then downloads **that** release's `install.sh` and
+`prometheus-exporters-lib.sh` and runs `install.sh` with your arguments plus
+`--release=<tag>`, so the image comes from the same release. `--uninstall`
+runs the release's `uninstall.sh` (with its `restore.sh` and lib) instead.
+Releases from before per-train approval have an `install.sh` without
+`--release`; for those, `get.sh` downloads the release's image, checks its
+sha256 and passes the local file instead.
+
+To install a specific release, pin it. This skips the approval check, which is
+how a tester installs a release under test:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
+  | sudo bash -s -- --release=v2026.07.15-r5 --enable=node_exporter
+```
+
+`install.sh`, `uninstall.sh` and `restore.sh` run on their own (downloaded from
+a release, or piped from one) use the same rule for whatever they download:
+`--release=TAG` if given, else the newest release approved for the box's train.
+None of them use GitHub's "Latest" release any more.
 
 ## What lives on the data pool
 
@@ -76,7 +121,8 @@ Metrics are at `http://<host>:<port>/metrics`. See [exporters.md](exporters.md).
 ## Verifying
 
 ```bash
-sudo ./install.sh --check
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
+  | sudo bash -s -- --check
 ```
 
 Reports: sysext merged, `/run` path wired, backup + PREINIT present and
@@ -87,7 +133,8 @@ present.
 ## Uninstalling
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/prometheus-exporters/releases/latest/download/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheus-exporters/main/get.sh \
+  | sudo bash -s -- --uninstall
 ```
 
 Stops all exporters, unmerges the sysext (re-merging any other sysexts),
