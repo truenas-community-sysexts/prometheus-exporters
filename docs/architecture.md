@@ -11,7 +11,7 @@ it; we set `ID=_any` so it loads regardless of the host's `os-release` ID.
 > **Only `/usr` (and `/opt`) are merged.** That's why the systemd units live in
 > `/usr/lib/systemd/system`, the exporter binaries in `/usr/bin`, FreeIPMI in
 > `/usr/sbin`, and why configs/state must live elsewhere (the data pool) and be
-> reached through a `/run` symlink — files a sysext puts under `/etc` are ignored.
+> reached through a `/run` symlink - files a sysext puts under `/etc` are ignored.
 
 ## Layout of `prometheus-exporters.raw`
 
@@ -35,7 +35,7 @@ usr/
 
 `node`, `smartctl`, `nut`, `blackbox`, `snmp`, and `ipmi` exporters are
 downloaded from their upstream GitHub releases as static `linux-amd64`
-binaries. Nothing to compile or link — they drop straight into `/usr/bin`. The
+binaries. Nothing to compile or link - they drop straight into `/usr/bin`. The
 release asset/path names embed the version, so `tracked-versions.json` stores
 them as templates (`{version}`, `{vnum}`) that the build expands; this keeps
 the daily auto-bump correct.
@@ -71,7 +71,7 @@ Instead:
    optional `EnvironmentFile`), runs `systemctl daemon-reload`, and
    `systemctl start`s each name in `enabled`.
 
-Running the PREINIT start every boot *is* the persistence — it replaces
+Running the PREINIT start every boot *is* the persistence - it replaces
 `systemctl enable` and survives the `/usr` reset that TrueNAS updates perform.
 
 ## Build & release pipeline

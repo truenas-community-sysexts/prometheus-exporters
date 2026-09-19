@@ -8,8 +8,8 @@ no source compilation here.
 
 `.github/workflows/build.yml`:
 
-1. **resolve** — reads `debian.suite` and the `mark_latest` input.
-2. **build** — runs in a `debian:<suite>-slim` container and:
+1. **resolve**: reads `debian.suite` and the `mark_latest` input.
+2. **build**: runs in a `debian:<suite>-slim` container and:
    - downloads each exporter's static `linux-amd64` release asset (expanding
      the `{version}`/`{vnum}` templates) into `/usr/bin`,
    - seeds the example configs (`blackbox.yml`, `snmp.yml`) from inside their
@@ -23,7 +23,7 @@ no source compilation here.
      `--version`-runnable, seed configs present, FreeIPMI bundled with all
      libraries resolved),
    - uploads the artifact.
-3. **release** — publishes a GitHub release with the `.raw`, its `.sha256`, and
+3. **release**: publishes a GitHub release with the `.raw`, its `.sha256`, and
    the install scripts. `make_latest` follows the `mark_latest` input.
 
 Run a verified build from the Actions tab (**Build prometheus-exporters
@@ -64,7 +64,7 @@ The shape is enforced by `.github/scripts/validate-tracked-versions.sh`.
 
 1. Add an entry under `exporters` with the repo, current tag, and the
    `asset`/`extract` patterns (download a release once and `tar tzf` it to get
-   the exact internal path — the version usually appears in both).
+   the exact internal path - the version usually appears in both).
 2. Add a `sysext/usr/lib/systemd/system/<name>.service` unit. Reference configs
    via `/run/prometheus-exporters/configs/<name>.yml` and optional overrides via
    `EnvironmentFile=-/run/prometheus-exporters/env/<name>.env` + `$ARGS`.
