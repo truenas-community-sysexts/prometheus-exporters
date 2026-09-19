@@ -12,7 +12,7 @@ merges it into `/usr`, copies it to your data pool, seeds default configs,
 starts the exporters you enabled, and registers a PREINIT script so they come
 back after reboots and TrueNAS updates.
 
-Exporters ship **disabled** — nothing runs until you `--enable` it.
+Exporters ship **disabled** - nothing runs until you `--enable` it.
 
 ## Options
 
@@ -29,7 +29,7 @@ Exporters ship **disabled** — nothing runs until you `--enable` it.
 | `--help` | Usage |
 | `[path-to-.raw]` | Install a local image instead of downloading |
 
-`--enable`/`--disable` are **incremental** — they adjust the stored set, so you
+`--enable`/`--disable` are **incremental** - they adjust the stored set, so you
 can add or remove one exporter without restating the rest. Re-running
 `install.sh` with no `--enable`/`--disable` keeps the current set and just
 re-applies/upgrades.
@@ -47,7 +47,7 @@ re-applies/upgrades.
 | `env/<name>.env` | optional per-exporter overrides (see below) |
 
 At boot the PREINIT script symlinks this directory to `/run/prometheus-exporters`,
-which is the stable path the unit files reference — so editing a file here and
+which is the stable path the unit files reference - so editing a file here and
 restarting the service is all it takes to reconfigure.
 
 ## Configuring an exporter
@@ -80,7 +80,7 @@ sudo ./install.sh --check
 ```
 
 Reports: sysext merged, `/run` path wired, backup + PREINIT present and
-registered, and for each enabled exporter — binary present, service active,
+registered, and for each enabled exporter: binary present, service active,
 config seeded (where applicable), and (for `ipmi_exporter`) bundled FreeIPMI
 present.
 

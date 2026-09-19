@@ -19,7 +19,7 @@ sudo ./install.sh --check
 
 The PREINIT script re-merges the sysext and restarts enabled exporters.
 
-1. `sudo ./install.sh --check` — look at "PREINIT registered" and "PREINIT
+1. `sudo ./install.sh --check` - look at "PREINIT registered" and "PREINIT
    completed this boot".
 2. `journalctl -b -t prometheus-exporters-preinit` for the boot log.
 3. Confirm the persistent dir exists: `ls /mnt/*/.config/prometheus-exporters/`.
@@ -52,7 +52,7 @@ Create `/mnt/<pool>/.config/prometheus-exporters/env/<name>.env` with
    should resolve to `/usr/sbin/ipmimonitoring`. If not, the sysext isn't
    merged.
 3. Test FreeIPMI directly: `sudo ipmimonitoring`. If that fails, the exporter
-   can't collect either — it's an IPMI/host issue, not the exporter.
+   can't collect either - it's an IPMI/host issue, not the exporter.
 4. For a remote BMC, you need a config file (see
    [exporters.md](exporters.md#ipmi_exporter--port-9290)).
 
@@ -67,5 +67,5 @@ config file (see the exporter's upstream README).
 The FreeIPMI binaries carry their own libraries under
 `/usr/lib/prometheus-exporters/lib` with an `rpath`. `ldd /usr/sbin/ipmimonitoring`
 should show no "not found". If it does, the `debian.suite` in
-`tracked-versions.json` may be newer than your TrueNAS base — it should be the
+`tracked-versions.json` may be newer than your TrueNAS base - it should be the
 *oldest* Debian base among the TrueNAS versions you run.
