@@ -16,6 +16,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from urllib.parse import urlparse
 
 from release_fixtures import release, tag
 
@@ -26,13 +27,33 @@ BUILD_YML = ROOT / ".github" / "workflows" / "build.yml"
 REPO = "truenas-community-sysexts/prometheus-exporters"
 FORK = "someone/prometheus-exporters"
 
+
+def logged_host(line):
+    """Hostname of the URL in a stub-log line ("curl <url>"), or "" for other lines."""
+    parts = line.split()
+    if len(parts) > 1 and parts[0] == "curl":
+        return urlparse(parts[1]).hostname or ""
+    return ""
+
+
+def logged_path(line):
+    """Path of the URL in a stub-log line ("curl <url>"), or "" for other lines."""
+    parts = line.split()
+    if len(parts) > 1 and parts[0] == "curl":
+        return urlparse(parts[1]).path
+    return ""
+
+
 CURL_STUB = textwrap.dedent('''\
     #!/usr/bin/env python3
     import hashlib, json, os, re, sys
+    from urllib.parse import urlparse
     args = sys.argv[1:]
     url = next(a for a in args if a.startswith("http"))
     with open(os.environ["STUB_LOG"], "a") as f:
         f.write("curl " + url + "\\n")
+    parsed = urlparse(url)
+    host, path = parsed.hostname, parsed.path
     out = args[args.index("-o") + 1] if "-o" in args else None
     def emit(text):
         if out:
@@ -51,12 +72,12 @@ CURL_STUB = textwrap.dedent('''\
         if [ -f "$a" ]; then echo "image: $(cat "$a")"; fi
     done
     """
-    if "api.github.com" in url:
-        page = int(re.search(r"[?&]page=(\\d+)", url).group(1))
+    if host == "api.github.com":
+        page = int(re.search(r"(?:^|&)page=(\\d+)", parsed.query).group(1))
         pages = json.load(open(os.environ["STUB_PAGES"]))
         print(json.dumps(pages[page - 1] if page <= len(pages) else []))
-    elif "/releases/download/" in url:
-        tag, asset = url.split("/releases/download/")[1].split("/")
+    elif host == "github.com" and "/releases/download/" in path:
+        tag, asset = path.split("/releases/download/")[1].split("/")
         legacy = tag in os.environ.get("STUB_LEGACY", "").split()
         image = "IMAGE " + tag + "\\n"
         if asset == "prometheus-exporters.raw":
@@ -132,7 +153,8 @@ class Stubbed(unittest.TestCase):
         return out
 
     def assert_no_selection(self):
-        self.assertFalse(any(c.startswith("midclt") or "api.github.com" in c
+        self.assertFalse(any(c.startswith("midclt")
+                             or logged_host(c) == "api.github.com"
                              for c in self.calls()), self.calls())
 
 
@@ -203,7 +225,9 @@ class GetSh(GetShRun):
         out = self.ran(self.get(f"--repo={FORK}", "--enable=all"))
         self.assertEqual(out[0], f"RAN install.sh from {R6} with: "
                                  f"--enable=all --repo={FORK} --release={R6}")
-        self.assertIn(f"api.github.com/repos/{FORK}/releases", "\n".join(self.calls()))
+        self.assertTrue(any(logged_host(c) == "api.github.com"
+                            and logged_path(c) == f"/repos/{FORK}/releases"
+                            for c in self.calls()), self.calls())
         self.assertEqual({r for r, _, _ in self.downloads()}, {FORK})
 
     def test_repo_is_not_passed_to_the_uninstaller(self):
