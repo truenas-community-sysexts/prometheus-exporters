@@ -45,7 +45,8 @@ a hardware test approves it for its own train only:
   `<!-- verified-train: <key> -->` to the release notes. On the release's first
   approval the same update turns the pre-release into a full release and
   appends the changelog, so a full release never exists without a marker.
-- GitHub's "Latest" follows the newest release approved for a stable train. It
+- GitHub's "Latest" is the newest release signed off on any train, by run
+  number, so signing off an older release late never moves it backwards. It
   is cosmetic: `get.sh` and the scripts select by the markers, not by Latest.
 - A full release with **no** marker counts as approved for every train. That is
   how the releases from before per-train approval stay installable, and why
