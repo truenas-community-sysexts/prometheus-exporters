@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/prometheu
   | sudo bash -s -- --enable=node_exporter --pool=fast
 ```
 
-`get.sh` runs the installer from the newest release that a hardware test approved for your TrueNAS train (25.10, or 26 for every 26.x including betas). A release is approved per train: until a new one passes its hardware test on your train, you keep getting the last approved one, and nothing untested is installed. See [docs/install.md](docs/install.md#which-release-is-installed).
+`get.sh` runs the installer from the newest release that a hardware test approved for your TrueNAS train (25.10; from 26 on the major version, so 27 for every 27.x release including RCs). A release is approved per train: until a new one passes its hardware test on your train, you keep getting the last approved one, and nothing untested is installed. See [docs/install.md](docs/install.md#which-release-is-installed).
 
 ### Manage which run
 Run the same one-liner with other flags (they go after `bash -s --`):
