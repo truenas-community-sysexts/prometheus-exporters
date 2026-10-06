@@ -60,7 +60,7 @@ a hardware test approves it for its own train only:
   "freeipmi": { "package": "freeipmi-tools" },
   "trains": [                                 // one hardware-test issue each per release
     { "key": "25.10", "name": "TrueNAS 25.10", "channel": "stable" },
-    { "key": "26", "name": "TrueNAS 26 beta", "channel": "preview" }
+    { "key": "27", "name": "TrueNAS 27 RC", "channel": "preview" }
   ],
   "exporters": {
     "node_exporter": {
@@ -90,7 +90,8 @@ the binary. `config` (optional) seeds an example config from inside the tarball.
 `get.sh` derives from the TrueNAS version (the major from 26 on, major.minor
 before, e.g. `25.10`) and the value `promote.yml` writes into the
 `verified-train` marker; `name` goes into the issue title; `channel` is
-`stable` or `preview` and picks the issue label. When TrueNAS 26.0 goes GA, `26`
+`stable` or `preview` and picks the issue label. TrueNAS 26 was renamed 27 at
+its first RC, so the preview train is `27`. When TrueNAS 27.0 goes GA, `27`
 becomes a stable train.
 
 The shape is enforced by `.github/scripts/validate-tracked-versions.sh`, and
