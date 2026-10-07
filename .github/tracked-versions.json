@@ -27,7 +27,7 @@
     },
     "smartctl_exporter": {
       "repo": "prometheus-community/smartctl_exporter",
-      "version": "v0.14.0",
+      "version": "v0.15.0",
       "asset": "smartctl_exporter-{vnum}.linux-amd64.tar.gz",
       "extract": "smartctl_exporter-{vnum}.linux-amd64/smartctl_exporter",
       "port": 9633
@@ -40,7 +40,7 @@
     },
     "blackbox_exporter": {
       "repo": "prometheus/blackbox_exporter",
-      "version": "v0.28.0",
+      "version": "v0.29.0",
       "asset": "blackbox_exporter-{vnum}.linux-amd64.tar.gz",
       "extract": "blackbox_exporter-{vnum}.linux-amd64/blackbox_exporter",
       "port": 9115,
