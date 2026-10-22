@@ -40,7 +40,7 @@
     },
     "blackbox_exporter": {
       "repo": "prometheus/blackbox_exporter",
-      "version": "v0.29.0",
+      "version": "v0.29.1",
       "asset": "blackbox_exporter-{vnum}.linux-amd64.tar.gz",
       "extract": "blackbox_exporter-{vnum}.linux-amd64/blackbox_exporter",
       "port": 9115,
