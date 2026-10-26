@@ -51,7 +51,7 @@
     },
     "snmp_exporter": {
       "repo": "prometheus/snmp_exporter",
-      "version": "v0.30.1",
+      "version": "v0.31.0",
       "asset": "snmp_exporter-{vnum}.linux-amd64.tar.gz",
       "extract": "snmp_exporter-{vnum}.linux-amd64/snmp_exporter",
       "port": 9116,
